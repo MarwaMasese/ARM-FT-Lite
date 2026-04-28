@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 # Timeout for HTTP requests (connect, read)
 _REQUEST_TIMEOUT = (5, 30)
 
+_HEADERS = {
+    "User-Agent": (
+        "ARM-FT-Lite/1.0 (TFLite image classification benchmark; "
+        "https://github.com/arm-ft-lite) python-requests"
+    )
+}
+
 
 def download_image(url: str) -> Image.Image:
     """
@@ -40,7 +47,7 @@ def download_image(url: str) -> Image.Image:
     """
     logger.debug("Downloading image from %s", url)
 
-    response = requests.get(url, timeout=_REQUEST_TIMEOUT)
+    response = requests.get(url, timeout=_REQUEST_TIMEOUT, headers=_HEADERS)
     response.raise_for_status()
 
     try:
