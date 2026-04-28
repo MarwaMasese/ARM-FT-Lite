@@ -1,0 +1,17 @@
+# Production dependencies
+# Install on AWS Graviton (ARM64 Ubuntu):
+#   pip install -r requirements.txt
+
+# HTTP client
+requests>=2.31.0,<3.0
+
+# Image processing
+Pillow>=10.1.0,<11.0
+
+# Numerical computing (NumPy vectorised preprocessing)
+numpy>=1.26.0,<2.0
+
+# TFLite runtime — ARM64 wheel from Google
+# On Graviton: pip install tflite-runtime
+# On x86 dev: replace with tensorflow (see requirements-dev.txt)
+tflite-runtime>=2.15.0

@@ -1,0 +1,16 @@
+# Development dependencies (x86 / CI)
+# Extends requirements.txt:
+#   pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Test framework
+pytest>=8.0.0,<9.0
+pytest-cov>=5.0.0,<6.0
+
+# Linting & formatting
+ruff>=0.4.0
+mypy>=1.10.0
+
+# TFLite on x86 dev machines (replaces tflite-runtime)
+tensorflow>=2.15.0,<2.17
