@@ -382,7 +382,7 @@ no code instrumentation, no reboots required.
 ### Step 1 — Connect APX to your Graviton instance
 
 1. Download and install Arm Performix from
-   [developer.arm.com/tools-and-software/server-and-hpc/arm-performix](https://developer.arm.com/tools-and-software/server-and-hpc/arm-performix).
+   [https://developer.arm.com/servers-and-cloud-computing/arm-performix](https://developer.arm.com/servers-and-cloud-computing/arm-performix).
 2. Open APX and click **Add Target**.
 3. Enter your EC2 details:
    - **Hostname / IP**: your Graviton public DNS or IP (e.g. `ec2-xx-xx-xx-xx.compute-1.amazonaws.com`)
