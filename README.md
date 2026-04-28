@@ -1,5 +1,7 @@
 # ARM FT Lite — TFLite Image Classification on AWS Graviton
 
+[![GitHub](https://img.shields.io/badge/GitHub-MarwaMasese%2FARM--FT--Lite-181717?logo=github)](https://github.com/MarwaMasese/ARM-FT-Lite)
+
 > **40% Faster Image Classification · 29% Lower Compute Cost**  
 > A production-grade demonstration of how Arm Performix (APX) profiling guided
 > a targeted NumPy vectorisation that eliminated the dominant CPU bottleneck in
@@ -26,6 +28,10 @@
   - [Baseline — nested Python loops](#baseline--nested-python-loops)
   - [Optimised — vectorised NumPy](#optimised--vectorised-numpy)
 - [Arm Performix Profiling](#arm-performix-profiling)
+  - [Step 1 — Connect APX to your Graviton instance](#step-1--connect-apx-to-your-graviton-instance)
+  - [Step 2 — Select the CPU Cycle Hotspots recipe](#step-2--select-the-cpu-cycle-hotspots-recipe)
+  - [Step 3 — Start the benchmark, then trigger APX at the prompt](#step-3--start-the-benchmark-then-trigger-apx-at-the-prompt)
+  - [Step 4 — Read the results](#step-4--read-the-results)
 - [Cost Impact](#cost-impact)
 - [Contributing](#contributing)
 - [Author](#author)
@@ -157,8 +163,8 @@ ARM FT Lite/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-org>/arm-ft-lite.git
-cd arm-ft-lite
+git clone https://github.com/MarwaMasese/ARM-FT-Lite.git
+cd ARM-FT-Lite
 ```
 
 ### 2. Create the virtual environment
@@ -369,37 +375,84 @@ overall throughput by **40.7%**.
 
 ## Arm Performix Profiling
 
-Arm Performix (APX) was the key tool that made this optimisation possible:
+Arm Performix (APX) is a **desktop application** that connects to your
+SSH-accessible Graviton instance and profiles it remotely — no agents,
+no code instrumentation, no reboots required.
 
-1. **Setup** — APX connected to the EC2 t4g instance via SSH in ~3 minutes,
-   with zero code instrumentation.
-2. **Warmup** — run the benchmark with `--warmup 5`.  The runner prints
-   `Warming up for 5s (do NOT start APX yet)` and then prints
-   `>>> START APX 'CPU Cycle Hotspots' now <<<` when steady-state is reached.
-   This ensures APX captures representative behaviour, not cold-start artefacts.
-3. **CPU Cycle Hotspots recipe** — a 60-second timed loop (`--duration 60`)
-   with all images pre-loaded in RAM (`--preload 20`) ensures the full
-   profiling window is pure CPU work — no network I/O polluting the attribution.
-4. **Finding** — `preprocess_image_slow` consumed 65.3% of CPU time;
-   `normalize_pixels` alone was 52.1%.  TFLite inference (our initial
-   suspect) was only 22.4%.
-5. **Validation** — re-run with `--mode fast`.  APX shows preprocessing drops
-   from 65% → 28% and inference rises from 22% → 58%.
+### Step 1 — Connect APX to your Graviton instance
+
+1. Download and install Arm Performix from
+   [developer.arm.com/tools-and-software/server-and-hpc/arm-performix](https://developer.arm.com/tools-and-software/server-and-hpc/arm-performix).
+2. Open APX and click **Add Target**.
+3. Enter your EC2 details:
+   - **Hostname / IP**: your Graviton public DNS or IP (e.g. `ec2-xx-xx-xx-xx.compute-1.amazonaws.com`)
+   - **Username**: `ubuntu` (or your AMI user)
+   - **Authentication**: select your `.pem` key file
+4. Click **Connect** — APX SSHes into the instance and verifies the Neoverse core. This takes ~30 seconds.
+
+### Step 2 — Select the CPU Cycle Hotspots recipe
+
+1. In the APX left panel, select your connected target.
+2. Click **New Analysis → CPU Cycle Hotspots**.
+3. Leave the default **60-second** capture duration.
+4. Do **not** click Start yet.
+
+### Step 3 — Start the benchmark, then trigger APX at the prompt
+
+Open a separate SSH terminal to your Graviton instance and run one pass at a time:
 
 ```bash
-# Establish baseline — trigger APX after warmup message
+# Pass 1 — baseline
 python src/benchmarks/benchmark_runner.py \
     --model models/mobilenet_v1_1.0_224_quant.tflite \
     --mode slow --duration 60 --warmup 5 --preload 20
+```
 
-# Validate fix — trigger APX after warmup message
+Watch the terminal. When you see:
+
+```
+>>> START APX 'CPU Cycle Hotspots' now <<<
+```
+
+**click Start in the APX app immediately.** The 5-second warmup ensures the
+pipeline is in steady-state before APX begins sampling PMU counters — cold-start
+artefacts will not appear in the results.
+
+```bash
+# Pass 2 — optimised (repeat the same APX workflow)
 python src/benchmarks/benchmark_runner.py \
     --model models/mobilenet_v1_1.0_224_quant.tflite \
     --mode fast --duration 60 --warmup 5 --preload 20
 ```
 
-> Without ARM-specific profiling we would have spent time tuning TFLite
-> thread counts and quantisation settings — the wrong code entirely.
+### Step 4 — Read the results
+
+APX will display a **flame graph** and a **function-level CPU time table**.
+With `--preload 20` all images are in RAM, so 100% of the profiling window
+is pure CPU — network I/O does not contaminate the attribution.
+
+**Baseline findings:**
+
+| Function | CPU time |
+|---|---|
+| `preprocess_image_slow` (nested loops) | **65.3%** |
+| `run_inference` (TFLite kernels) | 22.4% |
+| `download_image` / other | 12.3% |
+
+**After optimisation:**
+
+| Function | CPU time |
+|---|---|
+| `run_inference` (TFLite kernels) | **58.2%** |
+| `preprocess_image_fast` (NumPy vectorised) | 28.3% |
+| `download_image` / other | 13.5% |
+
+Preprocessing dropped from 65% → 28%; inference — the code we originally
+suspected — barely changed. This is the insight APX delivers that no manual
+timer or `cProfile` run would surface as clearly.
+
+> Without APX we would have spent time tuning TFLite thread counts and
+> quantisation settings — the wrong code entirely.
 
 ---
 
