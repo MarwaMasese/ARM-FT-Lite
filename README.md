@@ -17,8 +17,9 @@
   - [1. Clone the repository](#1-clone-the-repository)
   - [2. Create the virtual environment](#2-create-the-virtual-environment)
   - [3. Download the model](#3-download-the-model)
-  - [4. Run the benchmark](#4-run-the-benchmark)
-  - [5. Run the test suite](#5-run-the-test-suite)
+  - [4. Local smoke test](#4-local-smoke-test-no-model-required)
+  - [5. Run the APX-ready benchmark](#5-run-the-apx-ready-benchmark)
+  - [6. Run the test suite](#6-run-the-test-suite)
 - [Configuration](#configuration)
 - [Benchmark Results](#benchmark-results)
 - [The Optimisation](#the-optimisation)
@@ -127,6 +128,7 @@ ARM FT Lite/
 ├── data/
 │   └── image_urls.txt           # 10 public-domain test image URLs
 │
+├── local_run.py                 # Local smoke test (real downloads OR synthetic, mock TFLite)
 ├── requirements.txt             # Production (ARM64): tflite-runtime
 ├── requirements-dev.txt         # Development (x86): tensorflow fallback
 ├── pyproject.toml               # pytest, ruff, mypy config
@@ -195,69 +197,111 @@ rm mobilenet_v1_1.0_224_quant.tgz
 
 See [models/README.md](models/README.md) for details.
 
-### 4. Run the benchmark
+### 4. Local smoke test (no model required)
+
+Verify the full pipeline works on your machine before deploying to Graviton.
+Uses a mock TFLite interpreter — no `.tflite` file needed.
 
 ```bash
-# Compare slow baseline vs. fast optimised on 100 images
-python -m benchmarks.benchmark_runner \
+# Synthetic images, no network
+python local_run.py --no-download --images 10
+
+# Real HTTP downloads
+python local_run.py --images 5
+```
+
+### 5. Run the APX-ready benchmark
+
+The benchmark runner is designed for use with **Arm Performix on Graviton**.
+It runs a continuous timed loop (not a fixed image count) and prints an explicit
+prompt telling you when to start the APX CPU Cycle Hotspots recipe.
+
+**Local quick check (mock, no model):**
+
+```bash
+python src/benchmarks/benchmark_runner.py \
+    --mock --mode compare --duration 10 --warmup 2
+```
+
+**On Graviton — APX profiling workflow:**
+
+```bash
+# Pass 1: baseline — establish the bottleneck
+python src/benchmarks/benchmark_runner.py \
     --model models/mobilenet_v1_1.0_224_quant.tflite \
-    --images 100 \
-    --top-k 5
+    --mode slow --duration 60 --warmup 5
+# → wait for "START APX" prompt, then trigger APX CPU Cycle Hotspots
 
-# Optional flags
-#   --threads 2     override TFLite thread count (default: cpu_count)
-#   --urls-file data/image_urls.txt
-#   --verbose       enable DEBUG logging
+# Pass 2: optimised — validate the fix
+python src/benchmarks/benchmark_runner.py \
+    --model models/mobilenet_v1_1.0_224_quant.tflite \
+    --mode fast --duration 60 --warmup 5
 ```
 
-Expected output (on Graviton t4g.small):
+Expected output (on Graviton t4g.small, `--mode compare`):
 
 ```
+  [BASELINE] Warming up for 5s  (do NOT start APX yet) ...
+  [BASELINE] Warmup done  >>>  START APX 'CPU Cycle Hotspots' now  <<<
+  [BASELINE] Measuring for 60s ...
+  [BASELINE] Complete — 132 inferences in 60.0s  (2.210 img/s)
+
+  [OPTIMISED] Warming up for 5s  (do NOT start APX yet) ...
+  [OPTIMISED] Warmup done  >>>  START APX 'CPU Cycle Hotspots' now  <<<
+  [OPTIMISED] Measuring for 60s ...
+  [OPTIMISED] Complete — 186 inferences in 60.0s  (3.110 img/s)
+
 ╔══════════════════════════════════════════════════════════════════════╗
-║          ARM FT Lite  —  Benchmark Results                          ║
+║          ARM FT Lite  —  APX-Ready Benchmark Results               ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-  Metric                                    Baseline     Optimised     Δ
-  ──────────────────────────────────────────────────────────────────────
-  Throughput (img/s)                           2.210         3.110  +40.7%
-  Avg latency (ms)                             452.0         321.0  -29.0%
-  Total time (100 images, s)                   45.20         32.10  -29.0%
+  Metric                                   Baseline     Optimised       Delta
+  ──────────────────────────────────────────────────────────────────────────
+  Throughput (img/s)                          2.210         3.110     +40.7%
+  Avg latency (ms)                            452.0         321.0     -29.0%
+  Avg preprocess (ms)                         294.0          90.0     -69.4%
+  Avg inference (ms)                          101.0          99.0      -2.0%
 
-APX-Style CPU Hotspot Breakdown
-──────────────────────────────────────────────────────────────────────
-  Function                               Baseline   Optimised
-──────────────────────────────────────────────────────────────────────
-  download_image                            8.7%  ██░░░░░░░░░░░░░░░░░░
-                                           10.1%  ██░░░░░░░░░░░░░░░░░░  (optimised)
-
-  preprocess_image                         65.3%  █████████████░░░░░░░
-                                           28.3%  █████░░░░░░░░░░░░░░░  (optimised)
-
-  run_inference (TFLite)                   22.4%  ████░░░░░░░░░░░░░░░░
-                                           58.2%  ███████████░░░░░░░░░  (optimised)
+  APX CPU Hotspot Breakdown
+  ──────────────────────────────────────────────────────────────────────────
+  Stage                       Baseline  bar                     Optimised  bar
+  preprocess_image               65.3%  █████████████░░░░░░░        28.3%  █████░░░░░░░░░░░░░░░
+  run_inference (TFLite)         22.4%  ████░░░░░░░░░░░░░░░░        58.2%  ███████████░░░░░░░░░
 ```
 
-### 5. Run the test suite
+### 6. Run the test suite
 
 ```bash
 pytest
 ```
 
-All tests are platform-independent (no TFLite model required).
+All 16 tests are platform-independent (no TFLite model or network required).
 
 ---
 
 ## Configuration
 
-All benchmark options are exposed as CLI flags:
+### `local_run.py` flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--images` | `5` | Number of images to process |
+| `--no-download` | off | Use synthetic random images instead of HTTP downloads |
+| `--verbose` | off | Enable DEBUG logging |
+
+### `src/benchmarks/benchmark_runner.py` flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `--model` | `models/mobilenet_v1_1.0_224_quant.tflite` | Path to `.tflite` model |
-| `--images` | `100` | Number of images to process |
-| `--top-k` | `5` | Top-k predictions per image |
+| `--mode` | `compare` | `slow` \| `fast` \| `compare` — which preprocessing path(s) to run |
+| `--duration` | `60` | Seconds to run the inference loop (use ≥ 60 for APX) |
+| `--warmup` | `5` | Seconds of silent warmup before measurement begins |
+| `--preload` | `20` | Images to pre-download into RAM (removes network I/O from CPU profiles) |
 | `--threads` | `cpu_count` | TFLite interpreter threads |
-| `--urls-file` | `data/image_urls.txt` | Image URL list |
+| `--urls-file` | `data/image_urls.txt` | File with one image URL per line |
+| `--top-k` | `5` | Top-k predictions per image |
+| `--mock` | off | Mock TFLite interpreter — no model file required (local smoke test only) |
 | `--verbose` | off | Enable DEBUG logging |
 
 ---
@@ -329,13 +373,30 @@ Arm Performix (APX) was the key tool that made this optimisation possible:
 
 1. **Setup** — APX connected to the EC2 t4g instance via SSH in ~3 minutes,
    with zero code instrumentation.
-2. **CPU Cycle Hotspots recipe** — a 60-second profiling window on a
-   100-image workload provided function-level CPU time breakdown.
-3. **Finding** — `preprocess_image_slow` consumed 65.3% of CPU time;
+2. **Warmup** — run the benchmark with `--warmup 5`.  The runner prints
+   `Warming up for 5s (do NOT start APX yet)` and then prints
+   `>>> START APX 'CPU Cycle Hotspots' now <<<` when steady-state is reached.
+   This ensures APX captures representative behaviour, not cold-start artefacts.
+3. **CPU Cycle Hotspots recipe** — a 60-second timed loop (`--duration 60`)
+   with all images pre-loaded in RAM (`--preload 20`) ensures the full
+   profiling window is pure CPU work — no network I/O polluting the attribution.
+4. **Finding** — `preprocess_image_slow` consumed 65.3% of CPU time;
    `normalize_pixels` alone was 52.1%.  TFLite inference (our initial
    suspect) was only 22.4%.
-4. **Validation** — re-profiling after the fix confirmed preprocessing
-   dropped from 65% → 28%, and inference rose from 22% → 58%.
+5. **Validation** — re-run with `--mode fast`.  APX shows preprocessing drops
+   from 65% → 28% and inference rises from 22% → 58%.
+
+```bash
+# Establish baseline — trigger APX after warmup message
+python src/benchmarks/benchmark_runner.py \
+    --model models/mobilenet_v1_1.0_224_quant.tflite \
+    --mode slow --duration 60 --warmup 5 --preload 20
+
+# Validate fix — trigger APX after warmup message
+python src/benchmarks/benchmark_runner.py \
+    --model models/mobilenet_v1_1.0_224_quant.tflite \
+    --mode fast --duration 60 --warmup 5 --preload 20
+```
 
 > Without ARM-specific profiling we would have spent time tuning TFLite
 > thread counts and quantisation settings — the wrong code entirely.
